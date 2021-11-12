@@ -497,11 +497,11 @@ impl<V> OrderedTypeIdMap<V> {
 /// Metadata required to store a component
 #[derive(Debug, Copy, Clone)]
 pub struct TypeInfo {
-    id: TypeId,
-    layout: Layout,
-    drop: unsafe fn(*mut u8),
+    pub id: TypeId,
+    pub layout: Layout,
+    pub drop: unsafe fn(*mut u8),
     #[cfg(debug_assertions)]
-    type_name: &'static str,
+    pub type_name: &'static str,
 }
 
 impl TypeInfo {
