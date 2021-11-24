@@ -60,6 +60,7 @@ mod archetype;
 mod batch;
 mod borrow;
 mod bundle;
+mod command_buffer;
 mod dynamic_query;
 mod entities;
 mod entity_builder;
@@ -70,9 +71,10 @@ mod query_one;
 pub mod serialize;
 mod world;
 
-pub use archetype::Archetype;
+pub use archetype::{Archetype, ColumnRef};
 pub use batch::{BatchIncomplete, BatchWriter, ColumnBatch, ColumnBatchBuilder, ColumnBatchType};
 pub use bundle::{Bundle, DynamicBundle, MissingComponent};
+pub use command_buffer::CommandBuffer;
 pub use dynamic_query::{
     DynamicComponent, DynamicItem, DynamicQuery, DynamicQueryBorrow, DynamicQueryIter, DynamicWith,
     DynamicWithout, Ref as DynamicItemRef, RefMut as DynamicItemRefMut,
