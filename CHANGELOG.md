@@ -1,17 +1,30 @@
-# Unreleased
+# 0.7.1
+
+### Added
+- `EntityBuilderClone::add_bundle` accepting bundles of `Clone` components
+
+# 0.7.0
 
 ### Added
 - `Or` query combinator, allowing a single query to select entities that satisfy at least one of two
   sub-queries.
 - `EntityRef::has` to efficiently check for the presence of a component without borrowing it
-- `EntityBulider::new_cloneable` constructs an `EntityBuilder` that builds a `ReusableBuiltEntity`,
-  which can be spawned repeatedly by reference.
+- `EntityBuilderClone` helper for working with dynamic collections of
+  components that may be used repeatedly
 - `Satisfies` query combinator, which yields a `bool` without borrowing any components
+- `World::column` and `column_mut` for efficient random access within
+  a single component type
+- `CommandBuffer` helper for recording operations on a world in advance
 
 ### Changed
 - Added a niche to `Entity`, making `Option<Entity>` the same size as a bare `Entity`. As a
   consequence, `Entity::from_bits` is now fallible, and deserialization of `Entity` values from
   older versions may fail.
+
+### Fixed
+- Compatibility with 32-bit MIPS and PPC
+- Missing `Batch` reexport
+- Missing `ArchetypeColumn` reexport
 
 # 0.6.5
 

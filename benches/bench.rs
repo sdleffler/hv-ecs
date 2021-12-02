@@ -199,7 +199,7 @@ fn build(b: &mut Bencher) {
 
 fn build_cloneable(b: &mut Bencher) {
     let mut world = World::new();
-    let mut builder = EntityBuilder::new_cloneable();
+    let mut builder = EntityBuilderClone::new();
     builder.add(Position(0.0)).add(Velocity(0.0));
     let bundle = builder.build();
     b.iter(|| {
@@ -207,12 +207,23 @@ fn build_cloneable(b: &mut Bencher) {
     });
 }
 
+fn access_column(b: &mut Bencher) {
+    let mut world = World::new();
+    let _enta = world.spawn((Position(0.0), Velocity(0.0)));
+    let _entb = world.spawn((true, 12));
+    let entc = world.spawn((Position(3.0),));
+    let _entd = world.spawn((13, true, 4.0));
+    let column = world.column::<Position>();
+    b.iter(|| {
+        let _comp = bencher::black_box(column.get(entc).unwrap());
+    });
+}
 fn spawn_buffered(b: &mut Bencher) {
     let mut world = World::new();
     let mut buffer = CommandBuffer::new();
     let ent = world.reserve_entity();
     b.iter(|| {
-        buffer.spawn_at(ent, (Position(0.0), Velocity(0.0)));
+        buffer.insert(ent, (Position(0.0), Velocity(0.0)));
         buffer.run_on(&mut world);
     });
 }
@@ -232,6 +243,7 @@ benchmark_group!(
     iterate_mut_cached_100_by_50,
     build,
     build_cloneable,
+    access_column,
     spawn_buffered,
 );
 benchmark_main!(benches);

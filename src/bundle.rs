@@ -30,8 +30,7 @@ pub unsafe trait DynamicBundle {
     fn type_info(&self) -> Vec<TypeInfo>;
     /// Allow a callback to move all components out of the bundle
     ///
-    /// Must invoke `f` only with a valid pointer and the pointee's type and size. `put` may only be
-    /// called at most once on any given value.
+    /// Must invoke `f` only with a valid pointer and the pointee's type and size.
     #[doc(hidden)]
     unsafe fn put(self, f: impl FnMut(*mut u8, TypeInfo));
 }
@@ -55,6 +54,34 @@ pub unsafe trait Bundle: DynamicBundle {
     unsafe fn get(f: impl FnMut(TypeInfo) -> Option<NonNull<u8>>) -> Result<Self, MissingComponent>
     where
         Self: Sized;
+}
+
+/// A dynamically typed collection of cloneable components
+pub unsafe trait DynamicBundleClone: DynamicBundle {
+    /// Allow a callback to move all components out of the bundle
+    ///
+    /// Must invoke `f` only with a valid pointer, the pointee's type and size, and a `DynamicClone`
+    /// constructed for the pointee's type.
+    #[doc(hidden)]
+    unsafe fn put_with_clone(self, f: impl FnMut(*mut u8, TypeInfo, DynamicClone));
+}
+
+#[derive(Copy, Clone)]
+/// Type-erased [`Clone`] implementation
+pub struct DynamicClone {
+    pub(crate) func: unsafe fn(*const u8, &mut dyn FnMut(*mut u8, TypeInfo)),
+}
+
+impl DynamicClone {
+    pub(crate) fn new<T: Component + Clone>() -> Self {
+        Self {
+            func: |src, f| unsafe {
+                let mut tmp = (*src.cast::<T>()).clone();
+                f((&mut tmp as *mut T).cast(), TypeInfo::of::<T>());
+                core::mem::forget(tmp);
+            },
+        }
+    }
 }
 
 /// Error indicating that an entity did not have a required component
@@ -100,6 +127,23 @@ macro_rules! tuple_impl {
                     f(
                         (&mut $name as *mut $name).cast::<u8>(),
                         TypeInfo::of::<$name>()
+                    );
+                    mem::forget($name);
+                )*
+            }
+        }
+
+        unsafe impl<$($name: Component + Clone),*> DynamicBundleClone for ($($name,)*) {
+            // Compiler false positive warnings
+            #[allow(unused_variables, unused_mut)]
+            unsafe fn put_with_clone(self, mut f: impl FnMut(*mut u8, TypeInfo, DynamicClone)) {
+                #[allow(non_snake_case)]
+                let ($(mut $name,)*) = self;
+                $(
+                    f(
+                        (&mut $name as *mut $name).cast::<u8>(),
+                        TypeInfo::of::<$name>(),
+                        DynamicClone::new::<$name>()
                     );
                     mem::forget($name);
                 )*

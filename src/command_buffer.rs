@@ -15,28 +15,30 @@ use crate::Entity;
 use crate::World;
 use crate::{align, DynamicBundle};
 
-/// Allows spawn operations to be buffered for future application to a ['World']
+/// Records operations for future application to a [`World`]
+///
+/// Useful when operations cannot be applied directly due to ordering concerns or borrow checking.
 ///
 /// ```
 /// # use hecs::*;
 /// let mut world = World::new();
-/// let reserved_ent = world.reserve_entity();
-/// let mut entity_buffer = CommandBuffer::new();
-/// entity_buffer.spawn_at(reserved_ent,(true,0.10));
-/// entity_buffer.run_on(&mut world); // buffer can now be reused
-/// assert!(world.contains(reserved_ent));
+/// let entity = world.reserve_entity();
+/// let mut cmd = CommandBuffer::new();
+/// cmd.insert(entity, (true, 42));
+/// cmd.run_on(&mut world); // cmd can now be reused
+/// assert_eq!(*world.get::<i32>(entity).unwrap(), 42);
 /// ```
 pub struct CommandBuffer {
     entities: Vec<EntityIndex>,
     storage: NonNull<u8>,
     layout: Layout,
     cursor: usize,
-    info: Vec<ComponentInfo>,
+    components: Vec<ComponentInfo>,
     ids: Vec<TypeId>,
 }
 
 impl CommandBuffer {
-    /// Create an empty buffer
+    /// Create an empty command buffer
     pub fn new() -> Self {
         Self::default()
     }
@@ -69,79 +71,81 @@ impl CommandBuffer {
 
         let addr = self.storage.as_ptr().add(offset);
         ptr::copy_nonoverlapping(ptr, addr, ty.layout().size());
-        self.info.push(ComponentInfo {
-            ty_info: ty,
-            offset,
-        });
+        self.components.push(ComponentInfo { ty, offset });
         self.cursor = end;
     }
 
-    /// Record an entity spawn operation
-    pub fn spawn_at(&mut self, ent: Entity, bundle: impl DynamicBundle) {
-        let len = bundle.type_info().len();
+    /// Add components from `bundle` to `entity`, if it exists
+    ///
+    /// Pairs well with [`World::reserve_entity`] to spawn entities with a known handle.
+    pub fn insert(&mut self, entity: Entity, components: impl DynamicBundle) {
+        let first_component = self.components.len();
         unsafe {
-            bundle.put(|ptr, ty| self.add_inner(ptr, ty));
+            components.put(|ptr, ty| self.add_inner(ptr, ty));
         }
-        let begin = self.entities.last().map_or(0, |x| x.end);
-        let end = begin + len;
         self.entities.push(EntityIndex {
-            entity: ent,
-            begin,
-            end,
+            entity: Some(entity),
+            first_component,
         });
     }
 
-    /// Spawn every entity recorded with their components
+    /// Spawn a new entity with `components`
     ///
-    /// # Example
-    /// ```
-    /// # use hecs::*;
-    /// let mut world = World::new();
-    /// let a = world.reserve_entity();
-    /// let mut recorder = CommandBuffer::new();
-    /// recorder.spawn_at(a, (false,0.0));
-    /// recorder.run_on(&mut world);
-    /// assert!(world.contains(a));
-    /// ```
-    pub fn run_on(&mut self, world: &mut World) {
-        let mut mark = self.entities.len() - 1;
+    /// If the [`Entity`] is needed immediately, consider combining [`World::reserve_entity`] with
+    /// [`insert`](CommandBuffer::insert) instead.
+    pub fn spawn(&mut self, components: impl DynamicBundle) {
+        let first_component = self.components.len();
+        unsafe {
+            components.put(|ptr, ty| self.add_inner(ptr, ty));
+        }
+        self.entities.push(EntityIndex {
+            entity: None,
+            first_component,
+        });
+    }
 
-        for index in self.entities.iter() {
-            self.info[index.begin..index.end].sort_unstable_by_key(|z| z.ty_info);
+    /// Run recorded commands on `world`, clearing the command buffer
+    pub fn run_on(&mut self, world: &mut World) {
+        let mut end = self.components.len();
+        for entity in self.entities.iter().rev() {
+            self.components[entity.first_component..end].sort_unstable_by_key(|z| z.ty);
+            end = entity.first_component;
         }
 
-        for _ in 0..self.entities.len() {
-            let (ent, comps) = self.build(mark);
-            world.spawn_at(ent, comps);
-            if mark != 0 {
-                mark -= 1;
+        for index in (0..self.entities.len()).rev() {
+            let (entity, components) = self.build(index);
+            match entity {
+                Some(entity) => {
+                    // If `entity` no longer exists, quietly drop the components.
+                    let _ = world.insert(entity, components);
+                }
+                None => {
+                    world.spawn(components);
+                }
             }
         }
         self.clear();
     }
 
-    fn build(&mut self, mark: usize) -> (Entity, ReadyBuffer<'_>) {
+    fn build(&mut self, index: usize) -> (Option<Entity>, RecordedEntity<'_>) {
         self.ids.clear();
         self.ids.extend(
-            self.info[self.entities[mark].begin..self.entities[mark].end]
+            self.components[self.entities[index].first_component..]
                 .iter()
-                .map(|x| x.ty_info.id()),
+                .map(|x| x.ty.id()),
         );
-        let entity = self.entities[mark].entity;
-        (entity, ReadyBuffer { buffer: self, mark })
+        let entity = self.entities[index].entity;
+        (entity, RecordedEntity { cmd: self, index })
     }
 
-    /// Drop previously `recorded` entities and their components
-    ///
-    /// Recorder is cleared implicitly when entities are spawned, so usually this doesn't need to
-    /// be called
+    /// Drop all recorded commands
     pub fn clear(&mut self) {
         self.ids.clear();
         self.entities.clear();
         self.cursor = 0;
         unsafe {
-            for info in self.info.drain(..) {
-                info.ty_info.drop(self.storage.as_ptr().add(info.offset));
+            for info in self.components.drain(..) {
+                info.ty.drop(self.storage.as_ptr().add(info.offset));
             }
         }
     }
@@ -169,7 +173,7 @@ impl Default for CommandBuffer {
             storage: NonNull::dangling(),
             layout: Layout::from_size_align(0, 8).unwrap(),
             cursor: 0,
-            info: Vec::new(),
+            components: Vec::new(),
             ids: Vec::new(),
         }
     }
@@ -177,47 +181,47 @@ impl Default for CommandBuffer {
 
 /// The output of an '[CommandBuffer]` suitable for passing to
 /// [`World::spawn_into`](crate::World::spawn_into)
-struct ReadyBuffer<'a> {
-    buffer: &'a mut CommandBuffer,
-    mark: usize,
+struct RecordedEntity<'a> {
+    cmd: &'a mut CommandBuffer,
+    index: usize,
 }
-unsafe impl DynamicBundle for ReadyBuffer<'_> {
+
+unsafe impl DynamicBundle for RecordedEntity<'_> {
     fn with_ids<T>(&self, f: impl FnOnce(&[TypeId]) -> T) -> T {
-        f(&self.buffer.ids)
+        f(&self.cmd.ids)
     }
 
     fn type_info(&self) -> Vec<TypeInfo> {
-        self.buffer.info[self.buffer.entities[self.mark].begin..self.buffer.entities[self.mark].end]
+        self.cmd.components[self.cmd.entities[self.index].first_component..]
             .iter()
-            .map(|x| x.ty_info)
+            .map(|x| x.ty)
             .collect()
     }
 
     unsafe fn put(self, mut f: impl FnMut(*mut u8, TypeInfo)) {
         for info in self
-            .buffer
-            .info
-            .drain(self.buffer.entities[self.mark].begin..self.buffer.entities[self.mark].end)
+            .cmd
+            .components
+            .drain(self.cmd.entities[self.index].first_component..)
         {
-            let ptr = self.buffer.storage.as_ptr().add(info.offset);
-            f(ptr, info.ty_info);
+            let ptr = self.cmd.storage.as_ptr().add(info.offset);
+            f(ptr, info.ty);
         }
     }
 }
 
 /// Data required to store components and their offset  
 struct ComponentInfo {
-    ty_info: TypeInfo,
+    ty: TypeInfo,
     // Position in 'storage'
     offset: usize,
 }
 
 /// Data of buffered 'entity' and its relative position in component data
 struct EntityIndex {
-    entity: Entity,
-    // Range of associated indices in `CommandBuffer`'s `info` member
-    begin: usize,
-    end: usize,
+    entity: Option<Entity>,
+    // Position of this entity's first component in `CommandBuffer::info`
+    first_component: usize,
 }
 
 #[cfg(test)]
@@ -232,10 +236,10 @@ mod tests {
         let enta = world.reserve_entity();
         let entb = world.reserve_entity();
         let entc = world.reserve_entity();
-        buffer.spawn_at(ent, (true, "a"));
-        buffer.spawn_at(entc, (true, "a"));
-        buffer.spawn_at(enta, (1, 1.0));
-        buffer.spawn_at(entb, (1.0, "a"));
+        buffer.insert(ent, (true, "a"));
+        buffer.insert(entc, (true, "a"));
+        buffer.insert(enta, (1, 1.0));
+        buffer.insert(entb, (1.0, "a"));
         buffer.run_on(&mut world);
         assert_eq!(world.archetypes().len(), 4);
     }

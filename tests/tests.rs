@@ -5,6 +5,8 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+use std::borrow::Cow;
+
 use hecs::*;
 
 #[test]
@@ -201,6 +203,48 @@ fn build_entity() {
 }
 
 #[test]
+fn build_entity_clone() {
+    let mut world = World::new();
+    let mut entity = EntityBuilderClone::new();
+    entity.add("def");
+    entity.add([0u8; 1024]);
+    entity.add(456);
+    entity.add(789);
+    entity.add_bundle(("yup", 67_usize));
+    entity.add_bundle((5.0_f32, String::from("Foo")));
+    entity.add_bundle((7.0_f32, String::from("Bar"), 42_usize));
+    let entity = entity.build();
+    let e = world.spawn(&entity);
+    let f = world.spawn(&entity);
+    let g = world.spawn(&entity);
+    world
+        .insert_one(g, Cow::<'static, str>::from("after"))
+        .unwrap();
+
+    for e in [e, f, g] {
+        assert_eq!(*world.get::<&str>(e).unwrap(), "yup");
+        assert_eq!(*world.get::<i32>(e).unwrap(), 789);
+        assert_eq!(*world.get::<usize>(e).unwrap(), 42);
+        assert_eq!(*world.get::<f32>(e).unwrap(), 7.0);
+        assert_eq!(*world.get::<String>(e).unwrap(), "Bar");
+    }
+
+    assert_eq!(*world.get::<Cow<'static, str>>(g).unwrap(), "after");
+}
+
+#[test]
+fn build_builder_clone() {
+    let mut a = EntityBuilderClone::new();
+    a.add(String::from("abc"));
+    a.add(123);
+    let mut b = EntityBuilderClone::new();
+    b.add(String::from("def"));
+    b.add_bundle(&a.build());
+    assert_eq!(b.get::<String>(), Some(&String::from("abc")));
+    assert_eq!(b.get::<i32>(), Some(&123));
+}
+
+#[test]
 fn access_builder_components() {
     let mut world = World::new();
     let mut entity = EntityBuilder::new();
@@ -281,10 +325,10 @@ fn spawn_buffered_entity() {
     let ent2 = world.reserve_entity();
     let ent3 = world.reserve_entity();
 
-    buffer.spawn_at(ent, (1, true));
-    buffer.spawn_at(ent1, (13, 7.11, "hecs"));
-    buffer.spawn_at(ent2, (17 as i8, false, 'o'));
-    buffer.spawn_at(ent3, (2 as u8, "qwe", 101.103, false));
+    buffer.insert(ent, (1, true));
+    buffer.insert(ent1, (13, 7.11, "hecs"));
+    buffer.insert(ent2, (17 as i8, false, 'o'));
+    buffer.insert(ent3, (2 as u8, "qwe", 101.103, false));
 
     buffer.run_on(&mut world);
 
@@ -687,4 +731,26 @@ fn dynamic_query_one() {
     assert!(world
         .dynamic_query_one(&DynamicQuery::lift::<&i32>(), a)
         .is_err());
+}
+
+#[test]
+fn column_get() {
+    let mut world = World::new();
+    let ent = world.spawn((123, "abc"));
+    let ent2 = world.spawn((true, "hecs"));
+    let column = world.column::<&str>();
+    assert_eq!(*column.get(ent).unwrap(), "abc");
+    assert_eq!(*column.get(ent2).unwrap(), "hecs");
+}
+
+#[test]
+fn column_get_mut() {
+    let mut world = World::new();
+    let ent = world.spawn((0, true));
+    {
+        let mut column = world.column_mut::<i32>();
+        *column.get(ent).unwrap() = 99;
+        assert_eq!(*column.get(ent).unwrap(), 99);
+    }
+    assert_eq!(*world.get::<i32>(ent).unwrap(), 99);
 }
