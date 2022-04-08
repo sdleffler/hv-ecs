@@ -501,10 +501,15 @@ impl<V> OrderedTypeIdMap<V> {
 /// which internally calls [`core::ptr::drop_in_place`] with the correct type parameter.
 #[derive(Debug, Copy, Clone)]
 pub struct TypeInfo {
+    /// An id is used to dynamically name/check the component type
     pub id: TypeId,
+    /// A layout describes how memory should be allocatd for this component type
     pub layout: Layout,
+    /// A drop function which internally calls ['core::ptr::drop_in_place'] with the correct type
+    /// parameter, used as a destructor
     pub drop: unsafe fn(*mut u8),
     #[cfg(debug_assertions)]
+    /// The type name as a string, used for debugging
     pub type_name: &'static str,
 }
 
